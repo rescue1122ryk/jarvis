@@ -1,7 +1,6 @@
 package com.jarvis.urdu
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -18,7 +17,7 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-class Commands(private val a: Activity) {
+class Commands(private val a: Context) {
 
     private val msgRe = Regex(
         "^(.+?)\\s+(?:کو|ko)\\s+(?:.*?\\s+)?(?:کہ|کے|keh|ke)\\s+(.+)$",
@@ -55,6 +54,11 @@ class Commands(private val a: Activity) {
             )
         }
         return sb.toString().replace("ي", "ی").replace("ك", "ک")
+    }
+
+    private fun go(i: Intent) {
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        a.startActivity(i)
     }
 
     private fun has(t: String, vararg w: String) = w.any { t.contains(it) }
@@ -95,7 +99,7 @@ class Commands(private val a: Activity) {
             val url = if (has(t, "یوٹیوب", "youtube"))
                 "https://www.youtube.com/results?search_query=" + Uri.encode(q)
             else "https://www.google.com/search?q=" + Uri.encode(q)
-            a.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            go(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
             return "$q سرچ کر رہا ہوں"
         }
         if (has(t, "کھول", "khol", "open")) return openApp(t)
@@ -126,7 +130,7 @@ class Commands(private val a: Activity) {
     private fun call(name: String): String {
         val num = number(name) ?: return "$name کا نمبر نہیں ملا"
         val ok = a.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
-        a.startActivity(Intent(if (ok) Intent.ACTION_CALL else Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))
+        go(Intent(if (ok) Intent.ACTION_CALL else Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(num))))
         return "$name کو کال کر رہا ہوں"
     }
 
@@ -146,9 +150,9 @@ class Commands(private val a: Activity) {
             ?.contains(a.packageName) == true
         if (on) JarvisAccessibility.arm()
         try {
-            a.startActivity(Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp"))
+            go(Intent(Intent.ACTION_VIEW, uri).setPackage("com.whatsapp"))
         } catch (e: Exception) {
-            a.startActivity(Intent(Intent.ACTION_VIEW, uri))
+            go(Intent(Intent.ACTION_VIEW, uri))
         }
         return if (on) "$name کو واٹس ایپ پر پیغام بھیج رہا ہوں"
         else "چیٹ کھول دی ہے۔ ایکسیسبیلیٹی آن نہیں ہے، اس لیے بھیجیں کا بٹن آپ دبائیں"
@@ -162,7 +166,7 @@ class Commands(private val a: Activity) {
         val hit = list.firstOrNull { it.loadLabel(pm).toString().lowercase().contains(q) }
         val li = hit?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
             ?: return "$q نام کی ایپ نہیں ملی"
-        a.startActivity(li)
+        go(li)
         return "$q کھول رہا ہوں"
     }
 
@@ -174,7 +178,7 @@ class Commands(private val a: Activity) {
         if (has(t, "ساڑھے")) min = 30
         if (has(t, "شام", "رات", "دوپہر", "pm", "evening", "night") && h < 12) h += 12
         if (h > 23 || min > 59) return "وقت صحیح نہیں ہے"
-        a.startActivity(
+        go(
             Intent(AlarmClock.ACTION_SET_ALARM)
                 .putExtra(AlarmClock.EXTRA_HOUR, h)
                 .putExtra(AlarmClock.EXTRA_MINUTES, min)
@@ -191,7 +195,7 @@ class Commands(private val a: Activity) {
             has(t, "گھنٹ", "hour") -> n * 3600
             else -> n * 60
         }
-        a.startActivity(
+        go(
             Intent(AlarmClock.ACTION_SET_TIMER)
                 .putExtra(AlarmClock.EXTRA_LENGTH, sec)
                 .putExtra(AlarmClock.EXTRA_SKIP_UI, true)

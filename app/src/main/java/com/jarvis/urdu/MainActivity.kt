@@ -5,6 +5,9 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -14,10 +17,6 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import org.json.JSONArray
-import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
 import java.util.Locale
 
 class MainActivity : Activity(), TextToSpeech.OnInitListener {
@@ -29,6 +28,14 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun dp(x: Int) = (x * resources.displayMetrics.density).toInt()
     private fun prefs() = getSharedPreferences("jarvis", Context.MODE_PRIVATE)
 
+    private fun btn(label: String, size: Float = 15f, action: () -> Unit): Button {
+        val b = Button(this)
+        b.text = label
+        b.textSize = size
+        b.setOnClickListener { action() }
+        return b
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cmds = Commands(this)
@@ -38,45 +45,39 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         root.orientation = LinearLayout.VERTICAL
         root.setPadding(dp(16), dp(16), dp(16), dp(16))
 
-        val btnMic = Button(this)
-        btnMic.text = "🎤  بولیں"
-        btnMic.textSize = 24f
-        btnMic.setOnClickListener { listen() }
-
         input = EditText(this)
         input.hint = "یا یہاں لکھ کر حکم دیں"
+        logView = TextView(this)
+        logView.textSize = 16f
 
-        val btnRun = Button(this)
-        btnRun.text = "چلاؤ"
-        btnRun.setOnClickListener {
+        root.addView(btn("🎤  بولیں", 24f) { listen() })
+        root.addView(input)
+        root.addView(btn("چلاؤ") {
             val s = input.text.toString()
             input.setText("")
             if (s.isNotBlank()) handle(s)
-        }
+        })
+        root.addView(btn("👂 'جارویس' سننا شروع / بند") { toggleWake() })
+        root.addView(btn("سیٹنگز (AI کلید یہاں لگائیں)") { settingsDialog() })
+        root.addView(btn("1) ایکسیسبیلیٹی آن کریں (واٹس ایپ)") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
+        root.addView(btn("2) دوسری ایپس کے اوپر دکھانے کی اجازت") {
+            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+        })
+        root.addView(btn("3) بیٹری کی پابندی ہٹائیں") {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        })
+        root.addView(logView)
 
-        val btnSet = Button(this)
-        btnSet.text = "سیٹنگز (AI کلید)"
-        btnSet.setOnClickListener { settingsDialog() }
-
-        val btnAcc = Button(this)
-        btnAcc.text = "ایکسیسبیلیٹی آن کریں (واٹس ایپ کے لیے)"
-        btnAcc.setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-
-        logView = TextView(this)
-        logView.textSize = 16f
         val sv = ScrollView(this)
-        sv.addView(logView)
-
-        root.addView(btnMic)
-        root.addView(input)
-        root.addView(btnRun)
-        root.addView(btnSet)
-        root.addView(btnAcc)
-        root.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
-        setContentView(root)
+        sv.addView(root)
+        setContentView(sv)
 
         requestPermissions(
-            arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS), 1
+            arrayOf(
+                Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE,
+                Manifest.permission.SEND_SMS, Manifest.permission.RECORD_AUDIO,
+                Manifest.permission.POST_NOTIFICATIONS
+            ), 1
         )
         log("جارویس تیار ہے۔ مائیک دبا کر بولیں۔")
     }
@@ -92,6 +93,22 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun say(s: String) {
         log("جارویس: $s")
         tts?.speak(s, TextToSpeech.QUEUE_FLUSH, null, "j")
+    }
+
+    private fun toggleWake() {
+        if (WakeService.active) {
+            startService(Intent(this, WakeService::class.java).setAction("STOP"))
+            say("سننا بند کر دیا")
+            return
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2)
+            log("مائیک کی اجازت دیں، پھر یہی بٹن دوبارہ دبائیں")
+            return
+        }
+        val i = Intent(this, WakeService::class.java)
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        say("اب آپ مجھے بلا سکتے ہیں")
     }
 
     private fun listen() {
@@ -118,43 +135,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private fun handle(text: String) {
         log("آپ: $text")
         val r = cmds.run(text)
-        if (r != null) say(r) else askAI(text)
-    }
-
-    private fun askAI(q: String) {
-        val key = prefs().getString("key", "") ?: ""
-        val model = prefs().getString("model", "meta-llama/llama-3.3-70b-instruct:free") ?: ""
-        if (key.isBlank()) {
-            say("یہ حکم مجھے سمجھ نہیں آیا۔ AI کے لیے سیٹنگز میں OpenRouter کی کلید لگائیں")
-            return
-        }
-        Thread {
-            val reply = try {
-                val c = URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection
-                c.requestMethod = "POST"
-                c.connectTimeout = 15000
-                c.readTimeout = 40000
-                c.doOutput = true
-                c.setRequestProperty("Authorization", "Bearer $key")
-                c.setRequestProperty("Content-Type", "application/json")
-                val msgs = JSONArray()
-                    .put(JSONObject().put("role", "system").put("content",
-                        "You are Jarvis, a helpful assistant. Always reply in Urdu (Urdu script), briefly, in 1 to 3 sentences."))
-                    .put(JSONObject().put("role", "user").put("content", q))
-                val body = JSONObject().put("model", model).put("messages", msgs)
-                c.outputStream.use { it.write(body.toString().toByteArray()) }
-                val code = c.responseCode
-                val stream = if (code in 200..299) c.inputStream else c.errorStream
-                val txt = stream?.bufferedReader()?.readText() ?: ""
-                if (code in 200..299)
-                    JSONObject(txt).getJSONArray("choices").getJSONObject(0)
-                        .getJSONObject("message").getString("content").trim()
-                else "AI سے جواب نہیں ملا (کوڈ $code)۔ کلید یا ماڈل چیک کریں"
-            } catch (e: Exception) {
-                "انٹرنیٹ نہیں ہے یا AI سے رابطہ نہیں ہو سکا"
-            }
-            runOnUiThread { say(reply) }
-        }.start()
+        if (r != null) say(r) else Ai.ask(this, text) { say(it) }
     }
 
     private fun settingsDialog() {
@@ -165,8 +146,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         k.hint = "OpenRouter API key (sk-or-...)"
         k.setText(prefs().getString("key", ""))
         val m = EditText(this)
-        m.hint = "Model (:free wala)"
-        m.setText(prefs().getString("model", "meta-llama/llama-3.3-70b-instruct:free"))
+        m.hint = "Model"
+        m.setText(prefs().getString("model", Ai.DEFAULT_MODEL))
         box.addView(k)
         box.addView(m)
         AlertDialog.Builder(this)
